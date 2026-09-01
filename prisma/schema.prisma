@@ -1,0 +1,384 @@
+// AISOLVES — Behavioral Intelligence Growth OS
+// ---------------------------------------------------------------------------
+// Datasource: SQLite by default so `npm run dev` works with zero infra.
+// For production switch provider to "postgresql" and set DATABASE_URL.
+// Nothing else in the schema needs to change (no Json/enum/array types used).
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================================================
+// IDENTITY LAYER — anonymous -> consented -> authenticated -> qualified
+// ===========================================================================
+
+/// The persistent behavioural identity. Created on first paint, before any
+/// consent. Holds ONLY non-PII until the visitor upgrades their identity.
+model Visitor {
+  id        String   @id @default(cuid())
+  /// First-party anonymous id stored in a 1st-party cookie + localStorage.
+  anonId    String   @unique
+  createdAt DateTime @default(now())
+  lastSeen  DateTime @updatedAt
+
+  // --- Identity resolution ladder -----------------------------------------
+  /// anonymous | consented | identified | authenticated | client
+  identityStage String  @default("anonymous")
+  userId        String?
+  user          User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  leadId        String?
+
+  // --- Consent (GDPR / CCPA) ----------------------------------------------
+  consentGranted   Boolean   @default(false)
+  consentAt        DateTime?
+  consentMethod    String? // "google_login" | "explicit_accept" | "declined"
+  consentAnalytics Boolean   @default(false)
+  consentAds       Boolean   @default(false)
+  consentPersonal  Boolean   @default(false)
+
+  // --- First-touch attribution (immutable) --------------------------------
+  firstUtmSource   String?
+  firstUtmMedium   String?
+  firstUtmCampaign String?
+  firstUtmContent  String?
+  firstUtmTerm     String?
+  firstReferrer    String?
+  firstLandingPage String?
+  firstFbclid      String?
+  firstGclid       String?
+  firstTtclid      String?
+
+  // --- Last-touch attribution (mutable) -----------------------------------
+  lastUtmSource   String?
+  lastUtmMedium   String?
+  lastUtmCampaign String?
+  lastReferrer    String?
+
+  // --- Device / environment fingerprint (coarse, non-unique) --------------
+  deviceType   String?
+  os           String?
+  browser      String?
+  screenClass  String?
+  language     String?
+  timezone     String?
+  countryCode  String?
+  region       String?
+  city         String?
+  connection   String?
+  prefersDark  Boolean @default(false)
+  reducedMotion Boolean @default(false)
+
+  // --- Rolling behavioural aggregates (denormalised for dashboard speed) --
+  sessionCount     Int   @default(0)
+  totalEvents      Int   @default(0)
+  totalActiveMs    Int   @default(0)
+  maxScrollDepth   Int   @default(0)
+  pricingViews     Int   @default(0)
+  ctaHovers        Int   @default(0)
+  ctaClicks        Int   @default(0)
+  formStarts       Int   @default(0)
+  formAbandons     Int   @default(0)
+  rageClicks       Int   @default(0)
+  exitIntents      Int   @default(0)
+  videoCompletions Int   @default(0)
+
+  // --- Live lead score -----------------------------------------------------
+  score          Int    @default(0)
+  scoreIntent    Int    @default(0)
+  scoreEngage    Int    @default(0)
+  scoreFit       Int    @default(0)
+  scoreIdentity  Int    @default(0)
+  temperature    String @default("COLD") // COLD | WARM | HOT | MQL | SQL
+  /// JSON array of triggered behavioural signals, e.g. ["price_revisit","deep_scroll"]
+  signals        String @default("[]")
+
+  sessions  VisitSession[]
+  events    Event[]
+  snapshots ScoreSnapshot[]
+  leads     Lead[]
+
+  @@index([temperature, score])
+  @@index([lastSeen])
+  @@index([identityStage])
+}
+
+/// One continuous visit. Closed after 30 min of inactivity.
+model VisitSession {
+  id        String   @id @default(cuid())
+  visitorId String
+  visitor   Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  startedAt DateTime @default(now())
+  endedAt   DateTime?
+
+  entryPage    String?
+  exitPage     String?
+  referrer     String?
+  utmSource    String?
+  utmMedium    String?
+  utmCampaign  String?
+
+  pageViews     Int @default(0)
+  eventCount    Int @default(0)
+  /// Wall-clock duration
+  durationMs    Int @default(0)
+  /// Time the tab was visible AND the user was not idle. The honest metric.
+  activeMs      Int @default(0)
+  maxScrollPct  Int @default(0)
+  scoreDelta    Int @default(0)
+  isBounce      Boolean @default(true)
+
+  events Event[]
+
+  @@index([visitorId, startedAt])
+}
+
+// ===========================================================================
+// BEHAVIOURAL EVENT STREAM
+// ===========================================================================
+
+/// Every measurable behaviour. This is the raw material for scoring,
+/// retargeting audiences and the realtime dashboard feed.
+model Event {
+  id        String   @id @default(cuid())
+  /// Client-generated UUID. Doubles as Meta `event_id` for Pixel<->CAPI dedup.
+  eventId   String   @unique
+  visitorId String
+  visitor   Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  sessionId String?
+  session   VisitSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  /// Taxonomy name: "section.dwell", "cta.click", "form.field_complete"...
+  name      String
+  /// Top-level bucket: page | scroll | section | block | cta | form | video | identity | lead | onboarding | friction
+  category  String
+  /// Business weight 0-10, drives scoring without a lookup table at query time.
+  weight    Int      @default(0)
+
+  // Context
+  path       String?
+  sectionId  String?
+  blockId    String?
+  elementId  String?
+  /// Serialised JSON of non-PII metadata for this event.
+  metadata   String   @default("{}")
+
+  occurredAt DateTime @default(now())
+  receivedAt DateTime @default(now())
+
+  // Server-side fan-out state
+  sentToMeta   Boolean @default(false)
+  sentToGa4    Boolean @default(false)
+  sentToTiktok Boolean @default(false)
+
+  @@index([visitorId, occurredAt])
+  @@index([name, occurredAt])
+  @@index([category])
+  @@index([occurredAt])
+}
+
+/// Point-in-time score history — powers the "score over time" chart and lets
+/// you prove which behaviour moved a lead from WARM to HOT.
+model ScoreSnapshot {
+  id          String   @id @default(cuid())
+  visitorId   String
+  visitor     Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  score       Int
+  temperature String
+  reason      String   // the event that caused the recalculation
+  createdAt   DateTime @default(now())
+
+  @@index([visitorId, createdAt])
+}
+
+// ===========================================================================
+// LEAD CAPTURE & QUALIFICATION
+// ===========================================================================
+
+model Lead {
+  id        String   @id @default(cuid())
+  visitorId String?
+  visitor   Visitor? @relation(fields: [visitorId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  name      String
+  whatsapp  String
+  email     String?
+  company   String?
+  website   String?
+
+  /// whatsapp_widget | google_login | onboarding | contact_form
+  source    String
+  /// NEW | CONTACTED | QUALIFIED | PROPOSAL | WON | LOST | DISQUALIFIED
+  stage     String   @default("NEW")
+  /// Score frozen at the moment of capture — proves behavioural quality.
+  scoreAtCapture Int  @default(0)
+  temperatureAtCapture String @default("COLD")
+  /// JSON snapshot of the full behavioural profile at capture time.
+  behaviorSnapshot String @default("{}")
+
+  notes     String?
+  ownerNote String?
+
+  // WhatsApp conversation tracking (Business API webhooks)
+  waMessageId   String?
+  waStatus      String? // sent | delivered | read | replied
+  waLastReplyAt DateTime?
+
+  packages ClientPackage[]
+
+  @@index([stage, createdAt])
+  @@index([scoreAtCapture])
+}
+
+// ===========================================================================
+// AUTH (NextAuth v5 / Prisma adapter) + CLIENT ONBOARDING
+// ===========================================================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+
+  /// visitor | client | admin
+  role          String    @default("visitor")
+
+  accounts Account[]
+  sessions Session[]
+  visitors Visitor[]
+  profile  ClientProfile?
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// Stage-2 onboarding: the asset access we request after Google login.
+model ClientProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company     String?
+  website     String?
+  industry    String?
+  monthlyBudget String?
+  whatsapp    String?
+
+  /// Onboarding funnel state
+  /// started | google_linked | assets_requested | assets_connected | activated
+  onboardingStage String @default("started")
+  activatedAt     DateTime?
+
+  connections AssetConnection[]
+  packages    ClientPackage[]
+
+  @@index([onboardingStage])
+}
+
+/// One row per external asset the client grants us access to.
+model AssetConnection {
+  id        String   @id @default(cuid())
+  profileId String
+  profile   ClientProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  /// google | meta_business | google_business | website | tiktok | linkedin
+  provider  String
+  /// requested | pending | connected | failed | revoked
+  status    String   @default("requested")
+  /// External account id (ad account, page id, GBP location id, domain)
+  externalId String?
+  externalName String?
+  scopes    String?
+  /// Non-secret metadata about the connection (JSON)
+  metadata  String   @default("{}")
+
+  requestedAt DateTime @default(now())
+  connectedAt DateTime?
+
+  @@unique([profileId, provider])
+  @@index([status])
+}
+
+// ===========================================================================
+// COMMERCIAL LAYER — the packages we actually sell
+// ===========================================================================
+
+model Package {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  tagline     String
+  /// JSON array of included deliverables
+  features    String   @default("[]")
+  priceFrom   Int
+  currency    String   @default("EUR")
+  billing     String   @default("monthly")
+  /// Which behavioural temperature this package is pitched to
+  targetTemp  String   @default("HOT")
+  sortOrder   Int      @default(0)
+  active      Boolean  @default(true)
+
+  clients ClientPackage[]
+}
+
+model ClientPackage {
+  id        String   @id @default(cuid())
+  packageId String
+  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  profileId String?
+  profile   ClientProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  /// proposed | negotiating | active | paused | churned
+  status    String   @default("proposed")
+  mrr       Int      @default(0)
+  startedAt DateTime?
+  notes     String?
+  createdAt DateTime @default(now())
+
+  @@index([status])
+}

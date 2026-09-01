@@ -1,0 +1,278 @@
+@import "tailwindcss";
+
+/* ==========================================================================
+   AISOLVES — BRAND BOOK
+   Single source of truth. Mirrors src/lib/brand.ts.
+   ========================================================================== */
+
+@theme {
+  --color-ink:       #000000;
+  --color-cream:     #FFF5EF;
+  --color-blue:      #0028FF;
+  --color-graphite:  #201D1D;
+  --color-hairline:  #807B78;
+
+  --font-sans:  "Switzer", var(--font-inter-tight), "Helvetica Neue", Arial, sans-serif;
+  --font-serif: var(--font-instrument-serif), "Times New Roman", serif;
+
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --ease-brand:  cubic-bezier(0.65, 0.01, 0.05, 0.99);
+  --ease-out-brand: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  --bg: var(--color-ink);
+  --fg: var(--color-cream);
+  --line: color-mix(in srgb, var(--color-hairline) 40%, transparent);
+  --muted: color-mix(in srgb, var(--color-cream) 55%, transparent);
+  --shell: 1440px;
+  --gutter: clamp(16px, 4vw, 48px);
+}
+
+/* Light zones invert the palette without touching component code. */
+[data-theme="light"] {
+  --bg: var(--color-cream);
+  --fg: var(--color-ink);
+  --line: color-mix(in srgb, var(--color-hairline) 45%, transparent);
+  --muted: color-mix(in srgb, var(--color-ink) 55%, transparent);
+}
+
+* { box-sizing: border-box; }
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  margin: 0;
+  background: var(--color-ink);
+  color: var(--color-cream);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  overflow-x: hidden;
+}
+
+::selection { background: var(--color-blue); color: var(--color-cream); }
+
+/* Lenis */
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-smooth { scroll-behavior: auto !important; }
+.lenis.lenis-stopped { overflow: hidden; }
+
+/* ==========================================================================
+   TYPE SCALE — fluid, tight, display-first
+   ========================================================================== */
+
+.t-display {
+  font-size: clamp(3rem, 9.5vw, 9.5rem);
+  line-height: 0.92;
+  letter-spacing: -0.045em;
+  font-weight: 500;
+}
+.t-h1 { font-size: clamp(2.25rem, 5.4vw, 4.75rem); line-height: 1.0;  letter-spacing: -0.04em; font-weight: 500; }
+.t-h2 { font-size: clamp(1.75rem, 3.4vw, 3rem);    line-height: 1.05; letter-spacing: -0.038em; font-weight: 500; }
+.t-h3 { font-size: clamp(1.15rem, 1.7vw, 1.5rem);  line-height: 1.15; letter-spacing: -0.03em; font-weight: 500; }
+.t-body { font-size: clamp(0.95rem, 1.05vw, 1.0625rem); line-height: 1.5; letter-spacing: -0.015em; font-weight: 400; }
+.t-mono {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.serif-accent {
+  font-family: var(--font-serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+.blue { color: var(--color-blue); }
+
+/* ==========================================================================
+   THE SIGNATURE GRID — vertical hairlines running the full page height,
+   the structural device the reference site uses to hold every section.
+   ========================================================================== */
+
+.shell {
+  position: relative;
+  max-width: var(--shell);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.grid-lines {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  max-width: var(--shell);
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+.grid-lines > span {
+  border-left: 1px solid var(--line);
+  height: 100%;
+}
+.grid-lines > span:last-child { border-right: 1px solid var(--line); }
+@media (max-width: 767px) {
+  .grid-lines { grid-template-columns: repeat(2, 1fr); }
+}
+
+.hairline-t { border-top: 1px solid var(--line); }
+.hairline-b { border-bottom: 1px solid var(--line); }
+
+/* Small "+" tick marks that punctuate the grid intersections. */
+.tick {
+  position: absolute;
+  width: 9px; height: 9px;
+  opacity: 0.5;
+  pointer-events: none;
+}
+.tick::before, .tick::after {
+  content: ""; position: absolute; background: var(--line);
+}
+.tick::before { left: 0; top: 4px; width: 9px; height: 1px; }
+.tick::after  { top: 0; left: 4px; height: 9px; width: 1px; }
+
+/* ==========================================================================
+   MOTION PRIMITIVES
+   ========================================================================== */
+
+/* Character/line reveal — set by SplitText, animated by GSAP. */
+.split-line { overflow: hidden; display: block; }
+.split-line > span { display: block; will-change: transform; }
+
+/* Masked reveals clip descenders (g, j, p, y). Pad the mask, then pull it
+   back so the optical baseline is unchanged. */
+.line-mask { display: block; overflow: hidden; padding-bottom: 0.12em; margin-bottom: -0.12em; }
+.split-line-inner { padding-bottom: 0.1em; }
+
+.reveal-up { opacity: 0; transform: translateY(24px); }
+.is-revealed { opacity: 1; transform: none; }
+
+@keyframes marquee-x {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marquee-x 38s linear infinite;
+}
+.marquee:hover .marquee-track { animation-play-state: paused; }
+
+@keyframes orbit-spin { to { transform: rotate(360deg); } }
+@keyframes pulse-ring {
+  0%   { opacity: 0.55; transform: scale(1); }
+  70%  { opacity: 0;    transform: scale(1.9); }
+  100% { opacity: 0;    transform: scale(1.9); }
+}
+@keyframes ticker-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ==========================================================================
+   COMPONENTS
+   ========================================================================== */
+
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 1.15rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+  overflow: hidden;
+  transition: color 0.35s var(--ease-brand), border-color 0.35s var(--ease-brand);
+  text-decoration: none;
+}
+.btn > span { position: relative; z-index: 1; }
+.btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateY(101%);
+  transition: transform 0.45s var(--ease-brand);
+  z-index: 0;
+}
+.btn:hover::after { transform: translateY(0); }
+
+.btn-primary { background: var(--color-blue); color: var(--color-cream); }
+.btn-primary::after { background: var(--color-cream); }
+.btn-primary:hover { color: var(--color-ink); }
+
+.btn-ghost { border-color: var(--line); color: var(--fg); background: transparent; }
+.btn-ghost::after { background: var(--color-blue); }
+.btn-ghost:hover { color: var(--color-cream); border-color: var(--color-blue); }
+
+.chip {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.card {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+  transition: background 0.4s var(--ease-brand), border-color 0.4s var(--ease-brand), transform 0.4s var(--ease-brand);
+}
+.card:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  border-color: color-mix(in srgb, var(--color-blue) 60%, transparent);
+  transform: translateY(-2px);
+}
+
+/* Grain — a single repeating SVG, cheap, keeps flat black from banding. */
+.grain::before {
+  content: "";
+  position: fixed; inset: 0; z-index: 60;
+  pointer-events: none; opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.scrollbar-none { scrollbar-width: none; }
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+/* ==========================================================================
+   ACCESSIBILITY
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .reveal-up { opacity: 1; transform: none; }
+  .marquee-track { animation: none; }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
