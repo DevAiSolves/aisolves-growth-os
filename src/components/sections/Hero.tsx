@@ -16,8 +16,14 @@ export function Hero() {
   const headline = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // Reduced motion must reveal EVERY animated target, not just the ones that
+    // move. `.hero-word` carries an inline opacity:0 that only the timeline
+    // clears — missing it here left the H1 invisible for anyone with the OS
+    // preference on, which is the exact opposite of an accessibility path.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      gsap.set(".hero-word", { opacity: 1, yPercent: 0 });
       gsap.set(".hero-anim", { opacity: 1, y: 0 });
+      gsap.set(".orbit-ring", { opacity: 1, scale: 1 });
       return;
     }
     const ctx = gsap.context(() => {

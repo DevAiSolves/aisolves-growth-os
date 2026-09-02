@@ -31,12 +31,18 @@ export function Reveal({
     if (!el) return;
     gsap.registerPlugin(ScrollTrigger);
 
+    // The wrapper always carries an inline opacity:0 so there is no flash
+    // before hydration. Whatever happens next, it must be cleared — in
+    // stagger mode the animation targets the CHILDREN, so forgetting the
+    // wrapper would leave the whole block invisible.
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      gsap.set(staggerChildren ? el.children : el, { opacity: 1, y: 0 });
+      gsap.set(el, { opacity: 1, y: 0 });
+      if (staggerChildren) gsap.set(el.children, { opacity: 1, y: 0 });
       return;
     }
 
     const targets = staggerChildren ? Array.from(el.children) : el;
+    if (staggerChildren) gsap.set(el, { opacity: 1 });
     const ctx = gsap.context(() => {
       gsap.fromTo(
         targets,
