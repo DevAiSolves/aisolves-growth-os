@@ -56,7 +56,12 @@ export default async function AdminDashboard() {
             <p className="t-mono blue mb-3">Vista agencia</p>
             <h1 className="t-h1">Inteligencia de comportamiento</h1>
           </div>
-          <Link href="/dashboard" className="btn btn-ghost"><span>← Mi cuenta</span></Link>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Link href="/dashboard/lab" className="btn btn-primary" data-track-cta="to-lab">
+              <span>Traffic Lab →</span>
+            </Link>
+            <Link href="/dashboard" className="btn btn-ghost"><span>← Mi cuenta</span></Link>
+          </div>
         </div>
 
         {/* ---- KPIs ---- */}

@@ -167,3 +167,40 @@ function safeLocal(key: string, value?: string): string | undefined {
     return localStorage.getItem(key) ?? undefined;
   } catch { return undefined; }
 }
+
+
+// ---------------------------------------------------------------------------
+// TRAFFIC CLASSIFICATION
+//
+// Paid and organic must never share a row in the dashboard: they have
+// different intent, different bounce and different benchmarks. Averaging them
+// hides whichever one is broken.
+// ---------------------------------------------------------------------------
+export type TrafficType = "paid" | "organic" | "social" | "email" | "referral" | "direct";
+
+const PAID_MEDIUMS = ["cpc", "ppc", "paid", "paidsocial", "paid_social", "display", "cpm", "banner", "retargeting"];
+const SOCIAL_HOSTS = ["facebook.", "instagram.", "t.co", "twitter.", "x.com", "linkedin.", "tiktok.", "pinterest.", "reddit."];
+const SEARCH_HOSTS = ["google.", "bing.", "duckduckgo.", "yahoo.", "ecosia.", "brave."];
+
+export function classifyTraffic(a: AttributionContext): TrafficType {
+  // A click id is the least ambiguous evidence that money was spent.
+  if (a.fbclid || a.gclid || a.ttclid || a.msclkid) return "paid";
+
+  const medium = (a.utmMedium ?? "").toLowerCase();
+  if (PAID_MEDIUMS.some((m) => medium.includes(m))) return "paid";
+  if (medium.includes("email") || medium.includes("newsletter")) return "email";
+  if (medium.includes("social")) return "social";
+  if (medium === "organic") return "organic";
+
+  const ref = (a.referrer ?? "").toLowerCase();
+  if (!ref) return a.utmSource ? "referral" : "direct";
+  try {
+    const host = new URL(ref).hostname;
+    if (host === window.location.hostname) return "direct"; // internal navigation
+    if (SEARCH_HOSTS.some((h) => host.includes(h))) return "organic";
+    if (SOCIAL_HOSTS.some((h) => host.includes(h))) return "social";
+    return "referral";
+  } catch {
+    return "referral";
+  }
+}

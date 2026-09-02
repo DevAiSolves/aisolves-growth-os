@@ -55,38 +55,57 @@ export function pushDataLayer(event: TrackEvent, extra: Record<string, unknown> 
   window._aisDL.push(payload); // local mirror for the live behaviour widget
 }
 
-export function fanOut(event: TrackEvent, consent: ConsentState) {
-  if (typeof window === "undefined") return;
+/**
+ * Returns which channels actually accepted the event. The server stores this,
+ * so `pixelFired && sentToMeta` gives a REAL Pixel<->CAPI match rate instead of
+ * the assumption that the browser call succeeded. Blockers make that
+ * assumption wrong 20-40% of the time, which is exactly the number we are
+ * trying to measure.
+ */
+export interface FanOutResult { pixel: boolean; ga4: boolean; tiktok: boolean }
+
+export function fanOut(event: TrackEvent, consent: ConsentState): FanOutResult {
+  const result: FanOutResult = { pixel: false, ga4: false, tiktok: false };
+  if (typeof window === "undefined") return result;
   pushDataLayer(event);
 
   const spec = getSpec(event.name);
-  if (!spec) return;
+  if (!spec) return result;
 
   // ---- Meta ---------------------------------------------------------------
   if (spec.meta && consent.ads && typeof window.fbq === "function") {
     const isStandard = STANDARD_META_EVENTS.has(spec.meta);
-    window.fbq(
-      isStandard ? "track" : "trackCustom",
-      spec.meta,
-      metaParams(event),
-      { eventID: event.eventId } // <- dedup key shared with the CAPI call
-    );
+    try {
+      window.fbq(
+        isStandard ? "track" : "trackCustom",
+        spec.meta,
+        metaParams(event),
+        { eventID: event.eventId } // <- dedup key shared with the CAPI call
+      );
+      result.pixel = true;
+    } catch { /* blocked or stubbed by an extension */ }
   }
 
   // ---- GA4 / Google Ads ---------------------------------------------------
   if (spec.ga4 && consent.analytics && typeof window.gtag === "function") {
-    window.gtag("event", spec.ga4, {
-      event_id: event.eventId,
-      ais_section: event.sectionId,
-      ais_block: event.blockId,
-      ais_weight: event.weight,
-      ...event.metadata,
-    });
+    try {
+      window.gtag("event", spec.ga4, {
+        event_id: event.eventId,
+        ais_section: event.sectionId,
+        ais_block: event.blockId,
+        ais_weight: event.weight,
+        ...event.metadata,
+      });
+      result.ga4 = true;
+    } catch { /* blocked */ }
   }
 
   // ---- TikTok -------------------------------------------------------------
   if (spec.tiktok && consent.ads && window.ttq) {
-    window.ttq.track(spec.tiktok, metaParams(event), { event_id: event.eventId });
+    try {
+      window.ttq.track(spec.tiktok, metaParams(event), { event_id: event.eventId });
+      result.tiktok = true;
+    } catch { /* blocked */ }
   }
 
   // ---- LinkedIn (conversion ids are numeric, mapped in env) ---------------
@@ -94,6 +113,8 @@ export function fanOut(event: TrackEvent, consent: ConsentState) {
     const liId = LINKEDIN_CONVERSIONS[event.name];
     if (liId) window.lintrk("track", { conversion_id: liId });
   }
+
+  return result;
 }
 
 const STANDARD_META_EVENTS = new Set([

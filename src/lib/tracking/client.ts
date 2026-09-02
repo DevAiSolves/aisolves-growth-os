@@ -59,10 +59,18 @@ class Tracker {
   private lastInput = Date.now();
   maxScroll = 0;
   sectionDwell: Record<string, number> = {};
+  /** ms from page.view to each scroll milestone. Depth without timing lies. */
+  scrollTimings: Record<number, number> = {};
+  /** Any deliberate interaction at all — the third leg of the bounce test. */
+  hasInteracted = false;
+  private pageStart = Date.now();
+  private firstUsefulEventAt: number | null = null;
   private counters = {
     pricingViews: 0, ctaHovers: 0, ctaClicks: 0, formStarts: 0,
     formAbandons: 0, rageClicks: 0, exitIntents: 0, videoCompletions: 0,
+    ctaViews: 0, formSubmits: 0, jsErrors: 0, tabHidden: 0,
   };
+  private flags = { qualityVisit: false, offerViewed: false, bounced: false };
   private recent: { name: string; at: number; points: number }[] = [];
   private eventCount = 0;
 
@@ -128,13 +136,21 @@ class Tracker {
       metadata,
     };
 
+    // Time-to-first-useful-event: how much dead air the visitor sat through
+    // after load before anything measurable happened.
+    if (this.firstUsefulEventAt === null && name !== "page.view" && spec.weight > 0) {
+      this.firstUsefulEventAt = Date.now();
+      this.queueTimingEvent(this.firstUsefulEventAt - this.pageStart);
+    }
+
     this.applyToCounters(event);
     this.queue.push(event);
     this.eventCount++;
     this.recent.unshift({ name, at: event.occurredAt, points: spec.weight });
     this.recent = this.recent.slice(0, 12);
 
-    fanOut(event, this.consent);
+    const delivered = fanOut(event, this.consent);
+    event.metadata = { ...event.metadata, _pixel: delivered.pixel, _ga4: delivered.ga4 };
     touchSession();
     this.emit();
 
@@ -153,6 +169,17 @@ class Tracker {
       case "friction.rage_click": c.rageClicks++; break;
       case "friction.exit_intent": c.exitIntents++; break;
       case "video.complete": c.videoCompletions++; break;
+      case "cta.view": c.ctaViews++; break;
+      case "form.submit": c.formSubmits++; break;
+      case "friction.js_error": c.jsErrors++; break;
+      case "friction.tab_hidden": c.tabHidden++; break;
+      case "quality.visit": this.flags.qualityVisit = true; break;
+      case "quality.offer_viewed": this.flags.offerViewed = true; break;
+      case "quality.bounce": this.flags.bounced = true; break;
+    }
+    // A click, a form touch or an expand is a deliberate act; a scroll is not.
+    if (["cta.click", "cta.whatsapp_click", "form.start", "block.expand", "video.start"].includes(e.name)) {
+      this.hasInteracted = true;
     }
     if (e.sectionId === "packages" && (e.name === "section.enter" || e.name === "section.revisit")) {
       c.pricingViews++;
@@ -167,7 +194,19 @@ class Tracker {
     if (pct > this.maxScroll) { this.maxScroll = pct; this.emit(); }
   }
 
-  markInput() {
+  /** Live active time, including the fraction accrued since the last tick. */
+  activeMsNow(): number {
+    const visible = typeof document !== "undefined" && document.visibilityState === "visible";
+    const pending = visible && !this.idle ? Date.now() - this.lastActiveTick : 0;
+    return this.activeMs + pending;
+  }
+
+  recordScrollTiming(milestone: number, ms: number) {
+    if (this.scrollTimings[milestone] === undefined) this.scrollTimings[milestone] = ms;
+  }
+
+  markInput(deliberate = false) {
+    if (deliberate) this.hasInteracted = true;
     this.lastInput = Date.now();
     if (this.idle) { this.idle = false; this.lastActiveTick = Date.now(); }
   }
@@ -185,6 +224,24 @@ class Tracker {
       this.emit();
     };
     setInterval(tick, 1000);
+  }
+
+  private queueTimingEvent(ms: number) {
+    // Deferred so it lands after the event that triggered it, not before.
+    setTimeout(() => this.track("time.first_useful_event", { ms }), 0);
+  }
+
+  /** Everything the TRAFFIC LAB endpoint needs that is not in the event stream. */
+  labState() {
+    return {
+      ...this.counters,
+      ...this.flags,
+      scrollTimings: this.scrollTimings,
+      hasInteracted: this.hasInteracted,
+      activeMs: this.activeMsNow(),
+      maxScroll: this.maxScroll,
+      timeToFirstEvent: this.firstUsefulEventAt ? this.firstUsefulEventAt - this.pageStart : null,
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -240,8 +297,9 @@ class Tracker {
       consent: this.consent,
       fbp: getFbp(),
       fbc: getFbc(),
-      activeMs: this.activeMs,
+      activeMs: this.activeMsNow(),
       maxScroll: this.maxScroll,
+      lab: this.labState(),
     });
 
     if (useBeacon && navigator.sendBeacon) {

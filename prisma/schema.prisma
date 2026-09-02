@@ -61,42 +61,68 @@ model Visitor {
   lastReferrer    String?
 
   // --- Device / environment fingerprint (coarse, non-unique) --------------
-  deviceType   String?
-  os           String?
-  browser      String?
-  screenClass  String?
-  language     String?
-  timezone     String?
-  countryCode  String?
-  region       String?
-  city         String?
-  connection   String?
-  prefersDark  Boolean @default(false)
+  deviceType    String?
+  os            String?
+  browser       String?
+  screenClass   String?
+  language      String?
+  timezone      String?
+  countryCode   String?
+  region        String?
+  city          String?
+  connection    String?
+  prefersDark   Boolean @default(false)
   reducedMotion Boolean @default(false)
 
+  // --- TRAFFIC LAB: acquisition -------------------------------------------
+  /// paid | organic | social | email | referral | direct
+  /// Paid and organic never share a row in the dashboard: different intent,
+  /// different benchmarks. Averaging them hides whichever one is broken.
+  trafficType String @default("direct")
+
+  // --- TRAFFIC LAB: survival & quality ------------------------------------
+  /// Max ACTIVE ms in any single session (not cumulative across visits).
+  survivedMs       Int     @default(0)
+  /// Active time >= 15s AND scroll >= 50%. The real optimisation event.
+  qualityVisit     Boolean @default(false)
+  /// Sustained dwell on the offer section. The honest ViewContent.
+  offerViewed      Boolean @default(false)
+  /// Left under 3s active, <25% scroll, zero deliberate interaction.
+  bounced          Boolean @default(false)
+  /// Any deliberate act (click / form / expand). Third leg of the bounce test.
+  hasInteracted    Boolean @default(false)
+  /// ms from page.view to the first non-pageview event. Measures dead air.
+  timeToFirstEvent Int?
+  /// JSON: milestone -> ms to reach it, e.g. {"25":1200,"50":3400}
+  scrollTimings    String  @default("{}")
+
   // --- Rolling behavioural aggregates (denormalised for dashboard speed) --
-  sessionCount     Int   @default(0)
-  totalEvents      Int   @default(0)
-  totalActiveMs    Int   @default(0)
-  maxScrollDepth   Int   @default(0)
-  pricingViews     Int   @default(0)
-  ctaHovers        Int   @default(0)
-  ctaClicks        Int   @default(0)
-  formStarts       Int   @default(0)
-  formAbandons     Int   @default(0)
-  rageClicks       Int   @default(0)
-  exitIntents      Int   @default(0)
-  videoCompletions Int   @default(0)
+  sessionCount     Int @default(0)
+  totalEvents      Int @default(0)
+  totalActiveMs    Int @default(0)
+  maxScrollDepth   Int @default(0)
+  pricingViews     Int @default(0)
+  ctaHovers        Int @default(0)
+  ctaClicks        Int @default(0)
+  formStarts       Int @default(0)
+  formAbandons     Int @default(0)
+  rageClicks       Int @default(0)
+  exitIntents      Int @default(0)
+  videoCompletions Int @default(0)
+  ctaViews         Int @default(0)
+  formSubmits      Int @default(0)
+  jsErrors         Int @default(0)
+  tabHidden        Int @default(0)
 
   // --- Live lead score -----------------------------------------------------
-  score          Int    @default(0)
-  scoreIntent    Int    @default(0)
-  scoreEngage    Int    @default(0)
-  scoreFit       Int    @default(0)
-  scoreIdentity  Int    @default(0)
-  temperature    String @default("COLD") // COLD | WARM | HOT | MQL | SQL
+  score         Int    @default(0)
+  scoreIntent   Int    @default(0)
+  scoreEngage   Int    @default(0)
+  scoreFit      Int    @default(0)
+  scoreIdentity Int    @default(0)
+  temperature   String @default("COLD") // COLD | WARM | HOT | MQL | SQL
   /// JSON array of triggered behavioural signals, e.g. ["price_revisit","deep_scroll"]
-  signals        String @default("[]")
+  signals       String @default("[]")
 
   sessions  VisitSession[]
   events    Event[]
@@ -106,32 +132,41 @@ model Visitor {
   @@index([temperature, score])
   @@index([lastSeen])
   @@index([identityStage])
+  @@index([trafficType, deviceType])
+  @@index([qualityVisit])
 }
 
 /// One continuous visit. Closed after 30 min of inactivity.
 model VisitSession {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   visitorId String
-  visitor   Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
-  startedAt DateTime @default(now())
+  visitor   Visitor   @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  startedAt DateTime  @default(now())
   endedAt   DateTime?
 
-  entryPage    String?
-  exitPage     String?
-  referrer     String?
-  utmSource    String?
-  utmMedium    String?
-  utmCampaign  String?
+  entryPage   String?
+  exitPage    String?
+  referrer    String?
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
 
-  pageViews     Int @default(0)
-  eventCount    Int @default(0)
+  pageViews    Int     @default(0)
+  eventCount   Int     @default(0)
   /// Wall-clock duration
-  durationMs    Int @default(0)
+  durationMs   Int     @default(0)
   /// Time the tab was visible AND the user was not idle. The honest metric.
-  activeMs      Int @default(0)
-  maxScrollPct  Int @default(0)
-  scoreDelta    Int @default(0)
-  isBounce      Boolean @default(true)
+  activeMs     Int     @default(0)
+  maxScrollPct Int     @default(0)
+  scoreDelta   Int     @default(0)
+  isBounce     Boolean @default(true)
+
+  // --- TRAFFIC LAB: per-session segmentation ------------------------------
+  trafficType  String?
+  deviceType   String?
+  qualityVisit Boolean @default(false)
+  /// Max ACTIVE ms reached in this session.
+  survivedMs   Int     @default(0)
 
   events Event[]
 
@@ -145,41 +180,50 @@ model VisitSession {
 /// Every measurable behaviour. This is the raw material for scoring,
 /// retargeting audiences and the realtime dashboard feed.
 model Event {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   /// Client-generated UUID. Doubles as Meta `event_id` for Pixel<->CAPI dedup.
-  eventId   String   @unique
+  eventId   String        @unique
   visitorId String
-  visitor   Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
+  visitor   Visitor       @relation(fields: [visitorId], references: [id], onDelete: Cascade)
   sessionId String?
   session   VisitSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   /// Taxonomy name: "section.dwell", "cta.click", "form.field_complete"...
-  name      String
+  name     String
   /// Top-level bucket: page | scroll | section | block | cta | form | video | identity | lead | onboarding | friction
-  category  String
+  category String
   /// Business weight 0-10, drives scoring without a lookup table at query time.
-  weight    Int      @default(0)
+  weight   Int    @default(0)
 
   // Context
-  path       String?
-  sectionId  String?
-  blockId    String?
-  elementId  String?
+  path      String?
+  sectionId String?
+  blockId   String?
+  elementId String?
   /// Serialised JSON of non-PII metadata for this event.
-  metadata   String   @default("{}")
+  metadata  String  @default("{}")
 
   occurredAt DateTime @default(now())
   receivedAt DateTime @default(now())
 
-  // Server-side fan-out state
+  // --- Fan-out state ------------------------------------------------------
+  /// Did the BROWSER pixel actually fire? Reported by the client, not assumed.
+  /// `pixelFired && sentToMeta` is the only honest Pixel<->CAPI match rate:
+  /// assuming the browser call succeeded is wrong 20-40% of the time, which is
+  /// precisely the number we exist to measure.
+  pixelFired   Boolean @default(false)
   sentToMeta   Boolean @default(false)
   sentToGa4    Boolean @default(false)
   sentToTiktok Boolean @default(false)
+  /// optimize | reporting — frozen at write time so historical rows stay
+  /// truthful even if the taxonomy is re-classified later.
+  metaRole     String?
 
   @@index([visitorId, occurredAt])
   @@index([name, occurredAt])
   @@index([category])
   @@index([occurredAt])
+  @@index([sessionId, name])
 }
 
 /// Point-in-time score history — powers the "score over time" chart and lets
@@ -190,7 +234,7 @@ model ScoreSnapshot {
   visitor     Visitor  @relation(fields: [visitorId], references: [id], onDelete: Cascade)
   score       Int
   temperature String
-  reason      String   // the event that caused the recalculation
+  reason      String // the event that caused the recalculation
   createdAt   DateTime @default(now())
 
   @@index([visitorId, createdAt])
@@ -207,21 +251,21 @@ model Lead {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  name      String
-  whatsapp  String
-  email     String?
-  company   String?
-  website   String?
+  name     String
+  whatsapp String
+  email    String?
+  company  String?
+  website  String?
 
   /// whatsapp_widget | google_login | onboarding | contact_form
-  source    String
+  source               String
   /// NEW | CONTACTED | QUALIFIED | PROPOSAL | WON | LOST | DISQUALIFIED
-  stage     String   @default("NEW")
+  stage                String @default("NEW")
   /// Score frozen at the moment of capture — proves behavioural quality.
-  scoreAtCapture Int  @default(0)
+  scoreAtCapture       Int    @default(0)
   temperatureAtCapture String @default("COLD")
   /// JSON snapshot of the full behavioural profile at capture time.
-  behaviorSnapshot String @default("{}")
+  behaviorSnapshot     String @default("{}")
 
   notes     String?
   ownerNote String?
@@ -250,7 +294,7 @@ model User {
   createdAt     DateTime  @default(now())
 
   /// visitor | client | admin
-  role          String    @default("visitor")
+  role String @default("visitor")
 
   accounts Account[]
   sessions Session[]
@@ -301,15 +345,15 @@ model ClientProfile {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  company     String?
-  website     String?
-  industry    String?
+  company       String?
+  website       String?
+  industry      String?
   monthlyBudget String?
-  whatsapp    String?
+  whatsapp      String?
 
   /// Onboarding funnel state
   /// started | google_linked | assets_requested | assets_connected | activated
-  onboardingStage String @default("started")
+  onboardingStage String    @default("started")
   activatedAt     DateTime?
 
   connections AssetConnection[]
@@ -320,22 +364,22 @@ model ClientProfile {
 
 /// One row per external asset the client grants us access to.
 model AssetConnection {
-  id        String   @id @default(cuid())
+  id        String        @id @default(cuid())
   profileId String
   profile   ClientProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
 
   /// google | meta_business | google_business | website | tiktok | linkedin
-  provider  String
+  provider     String
   /// requested | pending | connected | failed | revoked
-  status    String   @default("requested")
+  status       String  @default("requested")
   /// External account id (ad account, page id, GBP location id, domain)
-  externalId String?
+  externalId   String?
   externalName String?
-  scopes    String?
+  scopes       String?
   /// Non-secret metadata about the connection (JSON)
-  metadata  String   @default("{}")
+  metadata     String  @default("{}")
 
-  requestedAt DateTime @default(now())
+  requestedAt DateTime  @default(now())
   connectedAt DateTime?
 
   @@unique([profileId, provider])
@@ -347,38 +391,38 @@ model AssetConnection {
 // ===========================================================================
 
 model Package {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  name        String
-  tagline     String
+  id         String  @id @default(cuid())
+  slug       String  @unique
+  name       String
+  tagline    String
   /// JSON array of included deliverables
-  features    String   @default("[]")
-  priceFrom   Int
-  currency    String   @default("EUR")
-  billing     String   @default("monthly")
+  features   String  @default("[]")
+  priceFrom  Int
+  currency   String  @default("EUR")
+  billing    String  @default("monthly")
   /// Which behavioural temperature this package is pitched to
-  targetTemp  String   @default("HOT")
-  sortOrder   Int      @default(0)
-  active      Boolean  @default(true)
+  targetTemp String  @default("HOT")
+  sortOrder  Int     @default(0)
+  active     Boolean @default(true)
 
   clients ClientPackage[]
 }
 
 model ClientPackage {
-  id        String   @id @default(cuid())
+  id        String         @id @default(cuid())
   packageId String
-  package   Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  package   Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
   profileId String?
   profile   ClientProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
   leadId    String?
-  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  lead      Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
 
   /// proposed | negotiating | active | paused | churned
-  status    String   @default("proposed")
-  mrr       Int      @default(0)
+  status    String    @default("proposed")
+  mrr       Int       @default(0)
   startedAt DateTime?
   notes     String?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([status])
 }

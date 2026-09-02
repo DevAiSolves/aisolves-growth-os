@@ -89,12 +89,23 @@ Total 0-100 → banda → decisión operativa:
 | WARM | 25-49 | Retargeting de contenido + email de valor | < 24 h |
 | COLD | < 25 | Audiencia de awareness, sin contacto humano | — |
 
-### 3. Activación multicanal
+### 3. TRAFFIC LAB — diagnóstico de tráfico
+
+`/dashboard/lab` entrega el laboratorio: 20 movimientos con semáforo estricto y
+barras que se completan con el scroll, histograma de supervivencia sobre tiempo
+activo, funnel por sección, timeline del UU mediano, y el split entre lo que
+Meta puede optimizar y lo que es solo reporting.
+
+Tres reglas lo gobiernan: **UU ≠ Sessions ≠ Events**, **⚫ nunca se sustituye por
+cero**, y **paid y organic jamás comparten fila**. Detalle en
+[`docs/TRAFFIC-LAB.md`](docs/TRAFFIC-LAB.md).
+
+### 4. Activación multicanal
 
 Meta Pixel + Conversions API, Google Consent Mode v2 + GA4 Measurement Protocol,
 TikTok Events API y LinkedIn — todos alimentados desde la misma taxonomía.
 
-### 4. Captura en dos etapas
+### 5. Captura en dos etapas
 
 - **Gate post-scroll:** tras el primer scroll real, ofrece login con Google o
   aceptación explícita, a cambio de mostrarle su propio informe conductual.
@@ -201,8 +212,13 @@ callback OAuth y despliega.
 
 ## Documentación
 
-- [`docs/EVENT-TAXONOMY.md`](docs/EVENT-TAXONOMY.md) — los 48 eventos con su
-  mapeo por canal. **Generado desde el código** (`npm run docs:taxonomy`).
+- [`docs/TRAFFIC-LAB.md`](docs/TRAFFIC-LAB.md) — el diagnóstico de tráfico:
+  disciplina UU, semáforo, benchmarks, EMQ y dedup Pixel↔CAPI.
+- [`docs/MOTION-2026.md`](docs/MOTION-2026.md) — el sistema de motion en tres
+  capas progresivas (`animation-trigger`, scroll-driven, `@property`).
+- [`docs/EVENT-TAXONOMY.md`](docs/EVENT-TAXONOMY.md) — los 61 eventos con su
+  mapeo por canal y el rol optimizar/reporting. **Generado desde el código**
+  (`npm run docs:taxonomy`).
 - [`docs/TRACKING-ARCHITECTURE.md`](docs/TRACKING-ARCHITECTURE.md) — decisiones
   de diseño, deduplicación, privacidad y cumplimiento.
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) — producción, OAuth y píxeles.

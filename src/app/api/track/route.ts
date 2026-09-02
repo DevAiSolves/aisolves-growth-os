@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { getSpec, SERVER_SIDE_EVENTS } from "@/lib/tracking/taxonomy";
+import { classifyTrafficServer } from "@/lib/analytics/traffic";
 import { scoreVisitor, temperatureFor } from "@/lib/tracking/scoring";
 import { sendToMeta, type CapiEvent } from "@/lib/capi/meta";
 
@@ -27,6 +28,18 @@ const PayloadSchema = z.object({
   events: z.array(EventSchema).max(60),
   activeMs: z.number().optional(),
   maxScroll: z.number().optional(),
+  lab: z.object({
+    ctaViews: z.number().optional(),
+    formSubmits: z.number().optional(),
+    jsErrors: z.number().optional(),
+    tabHidden: z.number().optional(),
+    qualityVisit: z.boolean().optional(),
+    offerViewed: z.boolean().optional(),
+    bounced: z.boolean().optional(),
+    hasInteracted: z.boolean().optional(),
+    scrollTimings: z.record(z.number()).optional(),
+    timeToFirstEvent: z.number().nullable().optional(),
+  }).optional(),
   device: z.record(z.unknown()).optional(),
   attribution: z.record(z.unknown()).optional(),
   consent: z.object({
@@ -50,7 +63,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "invalid payload", detail: String(err) }, { status: 400 });
   }
 
-  const { anonId, sessionId, events, consent, device = {}, attribution = {} } = parsed;
+  const { anonId, sessionId, events, consent, device = {}, attribution = {}, lab = {} } = parsed;
+  const trafficType = classifyTrafficServer(attribution);
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? undefined;
   const ua = req.headers.get("user-agent") ?? undefined;
   const geo = {
@@ -101,6 +115,7 @@ export async function POST(req: NextRequest) {
       region: geo.region,
       city: geo.city,
       sessionCount: 1,
+      trafficType,
     },
     update: {
       consentGranted: consent.granted,
@@ -114,6 +129,9 @@ export async function POST(req: NextRequest) {
       lastReferrer: s(attribution.referrer),
       countryCode: geo.country ?? undefined,
       city: geo.city ?? undefined,
+      // First touch decides the traffic type. A paid visitor who returns via
+      // direct is still a paid visitor — reclassifying them would let paid
+      // campaigns quietly launder their bounce rate into the organic bucket.
     },
   });
 
@@ -133,6 +151,8 @@ export async function POST(req: NextRequest) {
         utmSource: s(attribution.utmSource),
         utmMedium: s(attribution.utmMedium),
         utmCampaign: s(attribution.utmCampaign),
+        trafficType,
+        deviceType: s(device.deviceType),
       },
     }).catch(async () =>
       prisma.visitSession.findFirstOrThrow({ where: { id: sessionId } })
@@ -161,6 +181,9 @@ export async function POST(req: NextRequest) {
       elementId: e.elementId,
       metadata: JSON.stringify(e.metadata).slice(0, 4000),
       occurredAt: new Date(e.occurredAt),
+      pixelFired: Boolean((e.metadata as Record<string, unknown>)._pixel),
+      sentToGa4: Boolean((e.metadata as Record<string, unknown>)._ga4),
+      metaRole: getSpec(e.name)?.metaRole ?? null,
     })),
   }).catch(() => { /* unique collisions are expected and harmless */ });
 
@@ -170,6 +193,7 @@ export async function POST(req: NextRequest) {
   const inc = {
     pricingViews: 0, ctaHovers: 0, ctaClicks: 0, formStarts: 0,
     formAbandons: 0, rageClicks: 0, exitIntents: 0, videoCompletions: 0,
+    ctaViews: 0, formSubmits: 0, jsErrors: 0, tabHidden: 0,
   };
   for (const e of events) {
     if (e.name === "cta.hover") inc.ctaHovers++;
@@ -179,8 +203,16 @@ export async function POST(req: NextRequest) {
     if (e.name === "friction.rage_click") inc.rageClicks++;
     if (e.name === "friction.exit_intent") inc.exitIntents++;
     if (e.name === "video.complete") inc.videoCompletions++;
+    if (e.name === "cta.view") inc.ctaViews++;
+    if (e.name === "form.submit") inc.formSubmits++;
+    if (e.name === "friction.js_error") inc.jsErrors++;
+    if (e.name === "friction.tab_hidden") inc.tabHidden++;
     if (e.sectionId === "packages" && (e.name === "section.enter" || e.name === "section.revisit")) inc.pricingViews++;
   }
+
+  const sawQuality = events.some((e) => e.name === "quality.visit");
+  const sawOffer   = events.some((e) => e.name === "quality.offer_viewed");
+  const sawBounce  = events.some((e) => e.name === "quality.bounce");
 
   const maxScroll = Math.max(visitor.maxScrollDepth, Math.round(parsed.maxScroll ?? 0));
   const activeMs = Math.max(visitor.totalActiveMs, Math.round(parsed.activeMs ?? 0));
@@ -199,6 +231,20 @@ export async function POST(req: NextRequest) {
       rageClicks: { increment: inc.rageClicks },
       exitIntents: { increment: inc.exitIntents },
       videoCompletions: { increment: inc.videoCompletions },
+      ctaViews: { increment: inc.ctaViews },
+      formSubmits: { increment: inc.formSubmits },
+      jsErrors: { increment: inc.jsErrors },
+      tabHidden: { increment: inc.tabHidden },
+      // Quality flags are sticky: once earned in any session they stay earned.
+      ...(sawQuality || lab.qualityVisit ? { qualityVisit: true } : {}),
+      ...(sawOffer || lab.offerViewed ? { offerViewed: true } : {}),
+      ...(sawBounce ? { bounced: true } : {}),
+      ...(lab.hasInteracted ? { hasInteracted: true, bounced: false } : {}),
+      survivedMs: Math.max(visitor.survivedMs, Math.round(parsed.activeMs ?? 0)),
+      ...(lab.timeToFirstEvent != null && visitor.timeToFirstEvent == null
+        ? { timeToFirstEvent: Math.round(lab.timeToFirstEvent) } : {}),
+      ...(lab.scrollTimings && Object.keys(lab.scrollTimings).length
+        ? { scrollTimings: JSON.stringify(lab.scrollTimings).slice(0, 500) } : {}),
     },
   });
 
@@ -210,7 +256,9 @@ export async function POST(req: NextRequest) {
       maxScrollPct: Math.max(session.maxScrollPct, Math.round(parsed.maxScroll ?? 0)),
       activeMs: Math.round(parsed.activeMs ?? session.activeMs),
       exitPage: events[events.length - 1]?.path ?? session.exitPage,
-      isBounce: (session.eventCount + events.length) < 5,
+      isBounce: sawBounce ? true : lab.hasInteracted ? false : (session.eventCount + events.length) < 5,
+      survivedMs: Math.max(session.survivedMs, Math.round(parsed.activeMs ?? 0)),
+      ...(sawQuality || lab.qualityVisit ? { qualityVisit: true } : {}),
     },
   }).catch(() => {});
 

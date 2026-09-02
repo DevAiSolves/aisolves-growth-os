@@ -4,7 +4,7 @@
  * Docs that are written by hand drift from the code within one sprint.
  */
 import { writeFileSync } from "fs";
-import { EVENTS, SECTION_WEIGHTS, type EventSpec } from "../src/lib/tracking/taxonomy";
+import { EVENTS, SECTION_WEIGHTS, OPTIMIZE_EVENTS, REPORTING_EVENTS, type EventSpec } from "../src/lib/tracking/taxonomy";
 
 const rows = Object.entries(EVENTS) as [string, EventSpec][];
 const byCategory = rows.reduce<Record<string, [string, EventSpec][]>>((acc, r) => {
@@ -30,6 +30,11 @@ quede con la señal de mayor calidad.
 
 **Peso** (0-10) es el valor de negocio que alimenta el motor de scoring.
 
+**Rol** separa lo que una campaña puede optimizar de lo que es solo medición.
+Esta distinción no es cosmética: poner un objetivo de campaña sobre un custom de
+scroll o sobre PageView enseña al modelo de puja a comprar scrollers baratos.
+Solo los eventos marcados **OPTIMIZAR** representan un compromiso comercial real.
+
 `;
 
 const CATEGORY_TITLES: Record<string, string> = {
@@ -41,12 +46,18 @@ const CATEGORY_TITLES: Record<string, string> = {
 
 for (const [cat, items] of Object.entries(byCategory)) {
   md += `\n## ${CATEGORY_TITLES[cat] ?? cat}\n\n`;
-  md += `| Evento | Peso | Dimensión | Meta | GA4 | TikTok | CAPI | Descripción |\n`;
-  md += `|---|---|---|---|---|---|---|---|\n`;
+  md += `| Evento | Peso | Dim. | Meta | Rol | GA4 | TikTok | CAPI | Descripción |\n`;
+  md += `|---|---|---|---|---|---|---|---|---|\n`;
   for (const [name, s] of items) {
-    md += `| \`${name}\` | ${s.weight} | ${s.scoreDim} | ${cell(s.meta)} | ${cell(s.ga4)} | ${cell(s.tiktok)} | ${cell(s.serverSide)} | ${s.description} |\n`;
+    const role = s.metaRole === "optimize" ? "**OPTIMIZAR**" : s.metaRole === "reporting" ? "reporting" : "—";
+    md += `| \`${name}\` | ${s.weight} | ${s.scoreDim} | ${cell(s.meta)} | ${role} | ${cell(s.ga4)} | ${cell(s.tiktok)} | ${cell(s.serverSide)} | ${s.description} |\n`;
   }
 }
+
+md += `\n## Qué se puede optimizar\n\n`;
+md += `**Optimizables (${OPTIMIZE_EVENTS.length}):** compromisos comerciales reales.\n\n`;
+for (const e of OPTIMIZE_EVENTS) md += `- \`${e}\` → \`${(EVENTS as Record<string, EventSpec>)[e].meta}\`\n`;
+md += `\n**Solo reporting (${REPORTING_EVENTS.length}):** medición. Nunca un objetivo de campaña.\n\n`;
 
 md += `\n## Pesos por sección\n\n`;
 md += `Cada sección declara cuánto tiempo cuenta como atención real (\`dwellMs\`) y\n`;

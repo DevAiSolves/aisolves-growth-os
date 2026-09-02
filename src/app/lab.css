@@ -1,0 +1,316 @@
+/* ==========================================================================
+   TRAFFIC LAB — MOTION SYSTEM 2026
+   --------------------------------------------------------------------------
+   Three progressive layers, newest first. Every layer degrades to the one
+   below it, and the bottom layer is static CSS that always works.
+
+     L3  animation-trigger / timeline-trigger   Chrome 145+ (2026), Chrome/Edge
+         One-shot scroll-TRIGGERED animation. The scroll position decides WHEN
+         the animation starts; it then plays at its own duration and easing.
+         Replaces IntersectionObserver entirely for reveal effects.
+
+     L2  animation-timeline: view()             ~82.6% global, NOT Baseline
+         Scroll-DRIVEN (scrubbed). The bar literally fills in proportion to
+         scroll position. Firefox is still behind a flag as of 152, so this is
+         guarded and never load-bearing.
+
+     L1  @property + transitions + linear()     Widely available
+         Typed custom properties make gradients, angles and counters
+         animatable, so the score ring and the odometer numbers need zero JS.
+
+   A JS IntersectionObserver fallback (useBarFill) covers browsers below L2.
+   ========================================================================== */
+
+/* --- L1: typed custom properties ---------------------------------------- */
+@property --fill {
+  syntax: "<percentage>";
+  inherits: false;
+  initial-value: 0%;
+}
+@property --deg {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@property --num {
+  syntax: "<integer>";
+  inherits: false;
+  initial-value: 0;
+}
+@property --glow {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+/* Spring emulation via linear(). Cheaper and smoother than a JS spring, and
+   it runs on the compositor. */
+:root {
+  --spring: linear(
+    0, 0.006, 0.025 2.8%, 0.101 6.1%, 0.539 18.9%, 0.721 25.3%, 0.849 31.5%,
+    0.937 38.1%, 0.968 41.8%, 0.991 45.7%, 1.006 50.1%, 1.015 60%, 1.006 76.2%, 1
+  );
+  --ease-lab: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --lab-green:  #00D47E;
+  --lab-yellow: #FFB020;
+  --lab-red:    #FF4D3D;
+  --lab-black:  #4A4744;
+  --lab-grid:   color-mix(in srgb, #807B78 26%, transparent);
+}
+
+/* ==========================================================================
+   THE BAR — the centrepiece the brief asks for: bars that COMPLETE as you
+   scroll and as timing accrues.
+   ========================================================================== */
+
+.lab-bar {
+  position: relative;
+  height: 10px;
+  background: color-mix(in srgb, #FFF5EF 8%, transparent);
+  border-radius: 2px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.lab-bar__fill {
+  /* --fill-target is written inline at render time, so it is correct in the
+     SSR HTML with zero JS. --fill is the animated value the fallback drives. */
+  --fill-target: 0%;
+  --fill: 0%;
+  position: absolute;
+  inset: 0;
+  width: var(--fill);
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--bar-color) 55%, transparent),
+    var(--bar-color)
+  );
+  transition: width 1.1s var(--spring);
+  will-change: width;
+}
+
+/* Moving sheen so a filled bar still reads as "live" rather than a static
+   block of colour. Pure transform — no layout, no paint. */
+.lab-bar__fill::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg, transparent, color-mix(in srgb, #FFF5EF 38%, transparent), transparent
+  );
+  transform: translateX(-100%);
+  animation: sheen 2.6s var(--ease-lab) infinite;
+}
+@keyframes sheen { to { transform: translateX(200%); } }
+
+/* --- L2: scrubbed fill. The bar completes as the row enters the viewport. */
+@supports (animation-timeline: view()) {
+  .lab-bar__fill.is-scrolldriven {
+    /* Full width immediately; the scroll timeline reveals it via clip-path.
+       No JavaScript is involved in this path at all. */
+    width: var(--fill-target);
+    transition: none;
+    animation: bar-scrub linear both;
+    animation-timeline: view();
+    /* Fills between the row appearing and it reaching the middle of the
+       screen, so the number and the bar land together in the reader's eye. */
+    animation-range: entry 18% cover 46%;
+  }
+  @keyframes bar-scrub {
+    from { clip-path: inset(0 100% 0 0); }
+    to   { clip-path: inset(0 0 0 0); }
+  }
+}
+
+/* --- L3: one-shot trigger, no IntersectionObserver at all. --------------- */
+@supports (animation-trigger: view()) {
+  .lab-row {
+    animation: row-in 0.72s var(--ease-lab) both;
+    animation-trigger: view() once;
+    animation-trigger-range: entry 10% cover 30%;
+  }
+  @keyframes row-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+  }
+}
+
+/* ==========================================================================
+   SCORE RING — conic gradient animated through a typed angle. Zero JS.
+   ========================================================================== */
+
+.score-ring {
+  --deg: 0deg;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  background:
+    conic-gradient(var(--ring-color) var(--deg), color-mix(in srgb, #FFF5EF 8%, transparent) 0);
+  transition: --deg 1.6s var(--ease-lab);
+}
+.score-ring::before {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  border-radius: 50%;
+  background: #000;
+}
+.score-ring::after {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  box-shadow: 0 0 32px color-mix(in srgb, var(--ring-color) calc(var(--glow) * 55%), transparent);
+  transition: --glow 1.2s ease;
+  pointer-events: none;
+}
+.score-ring > * { position: relative; z-index: 1; }
+
+/* ==========================================================================
+   ODOMETER — counts up with @property. No requestAnimationFrame loop.
+   ========================================================================== */
+
+.odometer {
+  --num: 0;
+  counter-reset: n var(--num);
+  animation: count-up 1.5s var(--ease-lab) both;
+  font-variant-numeric: tabular-nums;
+}
+.odometer::after { content: counter(n); }
+@keyframes count-up { from { --num: 0; } }
+
+@supports (animation-trigger: view()) {
+  .odometer {
+    animation-trigger: view() once;
+    animation-trigger-range: entry 0% cover 25%;
+  }
+}
+
+/* ==========================================================================
+   SEMÁFORO — variable-font weight morph + heartbeat on critical states.
+   Motion carries meaning here: only 🔴 pulses, so the eye is pulled to the
+   thing that is actually broken.
+   ========================================================================== */
+
+.light {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variation-settings: "wght" 500;
+  transition: font-variation-settings 0.5s var(--spring), color 0.4s ease;
+}
+.light[data-light="red"] { color: var(--lab-red); font-variation-settings: "wght" 650; }
+.light[data-light="yellow"] { color: var(--lab-yellow); }
+.light[data-light="green"] { color: var(--lab-green); }
+.light[data-light="black"] { color: var(--lab-black); }
+
+.light__dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.light[data-light="red"] .light__dot { animation: heartbeat 1.5s ease-in-out infinite; }
+.light[data-light="black"] .light__dot {
+  background: transparent;
+  border: 1px dashed currentColor;
+}
+@keyframes heartbeat {
+  0%, 100% { transform: scale(1);   box-shadow: 0 0 0 0 currentColor; }
+  40%      { transform: scale(1.3); box-shadow: 0 0 0 5px transparent; }
+}
+
+/* ==========================================================================
+   LIVE TICKER — the event stream, as a marquee. Signals "this is measuring
+   right now", which is the whole promise of the product.
+   ========================================================================== */
+
+.ticker { overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent); }
+.ticker__track { display: flex; width: max-content; animation: ticker-run 34s linear infinite; }
+@keyframes ticker-run { to { transform: translateX(-50%); } }
+.ticker:hover .ticker__track { animation-play-state: paused; }
+
+/* ==========================================================================
+   SEGMENT SWITCH — View Transitions. The numbers morph between paid and
+   organic instead of snapping, so the comparison stays legible.
+   ========================================================================== */
+
+@view-transition { navigation: auto; }
+
+::view-transition-old(lab-panel) { animation: vt-out 0.26s var(--ease-lab) both; }
+::view-transition-new(lab-panel) { animation: vt-in  0.34s var(--ease-lab) both; }
+@keyframes vt-out { to { opacity: 0; transform: translateY(-6px) scale(0.995); } }
+@keyframes vt-in  { from { opacity: 0; transform: translateY(8px) scale(0.995); } }
+
+.vt-panel { view-transition-name: lab-panel; }
+
+/* ==========================================================================
+   HISTOGRAM — columns grow from the baseline, staggered by index.
+   ========================================================================== */
+
+.histo__col {
+  transform-origin: bottom;
+  animation: histo-grow 0.9s var(--spring) both;
+  animation-delay: calc(var(--i) * 70ms);
+}
+@keyframes histo-grow { from { transform: scaleY(0); opacity: 0; } }
+
+@supports (animation-trigger: view()) {
+  .histo__col { animation-trigger: view() once; }
+}
+
+/* ==========================================================================
+   SCANLINE — a single sweeping line. One element, GPU transform, reads as
+   "instrument" rather than "dashboard template".
+   ========================================================================== */
+
+.lab-scan { position: relative; overflow: hidden; }
+.lab-scan::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  height: 1px;
+  top: 0;
+  background: linear-gradient(90deg, transparent, var(--brand-blue, #0028FF), transparent);
+  opacity: 0.5;
+  animation: scan 5.5s linear infinite;
+}
+@keyframes scan { to { transform: translateY(var(--scan-h, 340px)); } }
+
+/* ==========================================================================
+   DATA-GAP HATCHING — ⚫ rows are visibly *absent*, not merely empty. An empty
+   bar reads as "zero"; zero is a claim we have not earned.
+   ========================================================================== */
+
+.is-unmeasured {
+  background-image: repeating-linear-gradient(
+    45deg, transparent, transparent 4px,
+    color-mix(in srgb, #807B78 22%, transparent) 4px,
+    color-mix(in srgb, #807B78 22%, transparent) 5px
+  );
+}
+
+/* ==========================================================================
+   ACCESSIBILITY — motion is decoration; meaning must survive without it.
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .lab-bar__fill,
+  .lab-bar__fill.is-scrolldriven,
+  .lab-row, .odometer, .histo__col, .score-ring {
+    animation: none !important;
+    transition: none !important;
+  }
+  .lab-bar__fill { width: var(--fill-target); clip-path: none; animation: none; }
+  .lab-bar__fill::after { animation: none; opacity: 0; }
+  .light .light__dot { animation: none; }
+  .ticker__track { animation: none; }
+  .lab-scan::before { animation: none; opacity: 0.25; }
+  .odometer::after { content: counter(n); }
+  ::view-transition-old(lab-panel),
+  ::view-transition-new(lab-panel) { animation: none; }
+}

@@ -17,6 +17,7 @@
  */
 
 import { tracker } from "./client";
+import { SURVIVAL_BUCKETS, QUALITY_VISIT, BOUNCE, OFFER_SECTION } from "./taxonomy";
 
 type Cleanup = () => void;
 
@@ -31,6 +32,10 @@ export function installCollectors(): Cleanup {
     frictionCollector(),
     expandCollector(),
     activityCollector(),
+    survivalCollector(),
+    qualityCollector(),
+    visibilityCollector(),
+    errorCollector(),
   ];
   return () => cleanups.forEach((c) => c());
 }
@@ -44,6 +49,7 @@ function scrollCollector(): Cleanup {
   let lastT = performance.now();
   let slowRun = 0;
   let peak = 0;
+  const pageStart = performance.now();
 
   const onScroll = () => {
     if (ticking) return;
@@ -55,8 +61,14 @@ function scrollCollector(): Cleanup {
       const pct = h > 0 ? Math.min(100, Math.round((y / h) * 100)) : 0;
       tracker.reportScroll(pct);
 
-      for (const m of [25, 50, 75, 90] as const) {
-        if (pct >= m) tracker.track(`scroll.depth_${m}`, { pct });
+      // Every milestone carries the ms it took to reach it. Depth without
+      // timing cannot tell a reader from someone who flung the scrollbar.
+      for (const m of [25, 50, 75, 90, 100] as const) {
+        if (pct >= m) {
+          const msToReach = Math.round(performance.now() - pageStart);
+          tracker.track(`scroll.depth_${m}`, { pct, msToReach });
+          tracker.recordScrollTiming(m, msToReach);
+        }
       }
 
       const now = performance.now();
@@ -369,6 +381,12 @@ function formCollector(): Cleanup {
     const onUnload = () => {
       if (started && !submitted) {
         const lastField = [...fieldState.entries()].pop()?.[0];
+        // Name the exact field that killed the form instead of guessing later.
+        const lastIndex = fields.findIndex((f) => (f.name || f.id) === lastField);
+        tracker.track("form.field_drop", {
+          formId, field: lastField, index: lastIndex,
+          filledBefore: fields.filter((f, i) => i < lastIndex && "value" in f && f.value).length,
+        }, { elementId: formId });
         tracker.track("form.abandon", {
           formId, lastField,
           filledCount: fields.filter((f) => "value" in f && f.value).length,
@@ -477,14 +495,20 @@ function frictionCollector(): Cleanup {
 }
 
 function activityCollector(): Cleanup {
-  const mark = () => tracker.markInput();
+  // Scrolling and mouse movement keep the active clock alive but do NOT count
+  // as interaction — otherwise every bounce would look engaged.
+  const passiveEvents = ["mousemove", "scroll", "touchmove"];
+  const deliberateEvents = ["keydown", "click", "touchstart"];
+  const passive = () => tracker.markInput(false);
+  const deliberate = () => tracker.markInput(true);
   const opts = { passive: true } as const;
-  ["mousemove", "keydown", "scroll", "touchstart", "click"].forEach((e) =>
-    window.addEventListener(e, mark, opts)
-  );
-  return () => ["mousemove", "keydown", "scroll", "touchstart", "click"].forEach((e) =>
-    window.removeEventListener(e, mark)
-  );
+
+  passiveEvents.forEach((e) => window.addEventListener(e, passive, opts));
+  deliberateEvents.forEach((e) => window.addEventListener(e, deliberate, opts));
+  return () => {
+    passiveEvents.forEach((e) => window.removeEventListener(e, passive));
+    deliberateEvents.forEach((e) => window.removeEventListener(e, deliberate));
+  };
 }
 
 function cssPath(el: HTMLElement): string {
@@ -501,4 +525,122 @@ function cssPath(el: HTMLElement): string {
     depth++;
   }
   return parts.join(">").slice(0, 120);
+}
+
+
+// ---------------------------------------------------------------------------
+// SURVIVAL — active-time buckets.
+//
+// This is the dimension Ads Manager cannot see. A "click" that leaves at 1.2s
+// and one that reads for 45s are identical in the ad platform and completely
+// different humans. Buckets are measured on ACTIVE time, so a tab left open in
+// the background never inflates them.
+// ---------------------------------------------------------------------------
+function survivalCollector(): Cleanup {
+  const fired = new Set<string>();
+  const id = setInterval(() => {
+    const active = tracker.activeMsNow();
+    for (const b of SURVIVAL_BUCKETS) {
+      if (active >= b.ms && !fired.has(b.event)) {
+        fired.add(b.event);
+        tracker.track(b.event, { activeMs: Math.round(active), thresholdMs: b.ms });
+      }
+    }
+  }, 500);
+  return () => clearInterval(id);
+}
+
+// ---------------------------------------------------------------------------
+// QUALITY VISIT — active time AND scroll depth. Both conditions, never either.
+//
+// This is the only mid-funnel event worth giving Meta as an optimisation
+// target: it cannot be faked by a fast scroll or by an idle tab.
+// ---------------------------------------------------------------------------
+function qualityCollector(): Cleanup {
+  let qualityFired = false;
+  let offerFired = false;
+
+  const id = setInterval(() => {
+    if (!qualityFired) {
+      const active = tracker.activeMsNow();
+      if (active >= QUALITY_VISIT.minActiveMs && tracker.maxScroll >= QUALITY_VISIT.minScrollPct) {
+        qualityFired = true;
+        tracker.track("quality.visit", {
+          activeMs: Math.round(active),
+          scrollPct: tracker.maxScroll,
+          msToQualify: Math.round(performance.now()),
+        });
+      }
+    }
+    // A real ViewContent: sustained dwell on the offer itself.
+    if (!offerFired) {
+      const dwell = tracker.sectionDwell[OFFER_SECTION] ?? 0;
+      if (dwell >= tracker.sectionThreshold(OFFER_SECTION)) {
+        offerFired = true;
+        tracker.track("quality.offer_viewed", { dwellMs: dwell, section: OFFER_SECTION },
+          { sectionId: OFFER_SECTION });
+      }
+    }
+  }, 1000);
+
+  // Bounce is only knowable at exit.
+  const onExit = () => {
+    const active = tracker.activeMsNow();
+    if (active <= BOUNCE.maxActiveMs && tracker.maxScroll <= BOUNCE.maxScrollPct && !tracker.hasInteracted) {
+      tracker.track("quality.bounce", {
+        activeMs: Math.round(active), scrollPct: tracker.maxScroll,
+      });
+    }
+  };
+  window.addEventListener("pagehide", onExit);
+
+  return () => { clearInterval(id); window.removeEventListener("pagehide", onExit); };
+}
+
+// ---------------------------------------------------------------------------
+function visibilityCollector(): Cleanup {
+  let hiddenAt = 0;
+  const onChange = () => {
+    if (document.visibilityState === "hidden") {
+      hiddenAt = performance.now();
+    } else if (hiddenAt) {
+      tracker.track("friction.tab_hidden", { awayMs: Math.round(performance.now() - hiddenAt) });
+      hiddenAt = 0;
+    }
+  };
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+// ---------------------------------------------------------------------------
+// JS ERRORS — a broken page cannot convert, and this is usually the reason a
+// section's conversion rate collapses on one browser only.
+// ---------------------------------------------------------------------------
+function errorCollector(): Cleanup {
+  let count = 0;
+  const cap = 5; // never let an error loop flood the collector
+
+  const onError = (e: ErrorEvent) => {
+    if (count++ >= cap) return;
+    tracker.track("friction.js_error", {
+      message: String(e.message).slice(0, 160),
+      source: String(e.filename ?? "").slice(0, 120),
+      line: e.lineno, col: e.colno,
+      scrollPct: tracker.maxScroll,
+    });
+  };
+  const onRejection = (e: PromiseRejectionEvent) => {
+    if (count++ >= cap) return;
+    tracker.track("friction.js_error", {
+      message: String(e.reason?.message ?? e.reason).slice(0, 160),
+      kind: "unhandledrejection",
+    });
+  };
+
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onRejection);
+  return () => {
+    window.removeEventListener("error", onError);
+    window.removeEventListener("unhandledrejection", onRejection);
+  };
 }

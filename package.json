@@ -12,7 +12,8 @@
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
     "postinstall": "prisma generate",
-    "docs:taxonomy": "tsx scripts/gen-taxonomy-docs.ts"
+    "docs:taxonomy": "tsx scripts/gen-taxonomy-docs.ts",
+    "seed:traffic": "tsx scripts/seed-traffic.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.7.4",
