@@ -1,8 +1,10 @@
 // AISOLVES — Behavioral Intelligence Growth OS
 // ---------------------------------------------------------------------------
-// Datasource: SQLite by default so `npm run dev` works with zero infra.
-// For production switch provider to "postgresql" and set DATABASE_URL.
-// Nothing else in the schema needs to change (no Json/enum/array types used).
+// Datasource: PostgreSQL. SQLite cannot back a serverless deployment — the
+// filesystem is ephemeral and read-only, so every write would vanish or fail.
+//
+// Local dev: `docker compose up -d` starts Postgres 16 on :5432 with the
+// credentials already in .env.example. One command, still zero manual setup.
 // ---------------------------------------------------------------------------
 
 generator client {
@@ -10,8 +12,10 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Pooled connections (PgBouncer/Neon) for the app, direct for migrations.
+  directUrl = env("DIRECT_URL")
 }
 
 // ===========================================================================

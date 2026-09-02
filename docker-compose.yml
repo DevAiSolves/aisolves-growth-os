@@ -1,0 +1,23 @@
+# Local Postgres for development. `docker compose up -d` and you are done.
+# Production uses a managed Postgres (Neon, Supabase, RDS) via DATABASE_URL.
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aisolves-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aisolves
+      POSTGRES_PASSWORD: aisolves
+      POSTGRES_DB: aisolves
+    ports:
+      - "5432:5432"
+    volumes:
+      - aisolves-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aisolves"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aisolves-pgdata:

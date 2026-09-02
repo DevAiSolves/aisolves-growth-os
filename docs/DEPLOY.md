@@ -2,25 +2,30 @@
 
 ## 1. Base de datos
 
-SQLite está bien para desarrollo, no para producción (sin escrituras
-concurrentes, sin réplicas). Cambia dos líneas:
+El esquema ya es PostgreSQL. Necesitas una instancia gestionada.
 
-```prisma
-// prisma/schema.prisma
-datasource db {
-  provider = "postgresql"   // era "sqlite"
-  url      = env("DATABASE_URL")
-}
-```
+**Vercel + Neon (lo más rápido, tiene free tier):**
+Vercel dashboard → tu proyecto → **Storage** → **Create Database** → **Neon**.
+Vercel inyecta `DATABASE_URL` y `DATABASE_URL_UNPOOLED` automáticamente.
+Añade a mano `DIRECT_URL` con el mismo valor que `DATABASE_URL_UNPOOLED`.
+
+**Cualquier otro Postgres (Supabase, RDS, Railway):**
 
 ```bash
-DATABASE_URL="postgresql://user:pass@host:5432/db?sslmode=require"
-npx prisma migrate deploy
-npm run db:seed
+DATABASE_URL="postgresql://user:pass@host/db?sslmode=require&pgbouncer=true"
+DIRECT_URL="postgresql://user:pass@host/db?sslmode=require"
 ```
 
-El esquema no usa tipos `Json`, `enum` ni arrays, así que el cambio de proveedor
-no requiere ninguna otra modificación.
+`DATABASE_URL` es la cadena **pooled** que usa la app en runtime.
+`DIRECT_URL` es la **directa**, y sirve solo para migraciones: Prisma no puede
+correr DDL a través de un pooler en modo transacción.
+
+Aplica el esquema una vez:
+
+```bash
+DATABASE_URL="<directa>" DIRECT_URL="<directa>" npx prisma migrate deploy
+npm run db:seed
+```
 
 > **Volumen de eventos.** La tabla `Event` crece rápido: cuenta ~200-400 filas
 > por visitante interesado. Con tráfico significativo, particiona por
@@ -78,15 +83,26 @@ propiedad de sus activos.
 
 ## 5. Despliegue
 
-Cualquier plataforma que ejecute Node. En Vercel:
+El proyecto de Vercel está enlazado al repo de GitHub: cada push a `main`
+despliega solo. `npm run build` ejecuta `prisma generate`, así que el cliente de
+Prisma se reconstruye en cada despliegue.
+
+**Las migraciones NO corren en el build a propósito.** Un `migrate deploy`
+automático puede aplicar DDL destructivo a producción durante un despliegue
+rutinario. Se ejecuta a mano tras cambiar el esquema:
 
 ```bash
-npm i -g vercel
-vercel --prod
+DATABASE_URL="<directa>" npx prisma migrate deploy
 ```
 
-`npm run build` ya ejecuta `prisma generate`, así que el cliente de Prisma se
-construye en cada despliegue.
+### Checklist post-despliegue
+
+- [ ] `DATABASE_URL` y `DIRECT_URL` puestas en Vercel
+- [ ] `AUTH_SECRET` generado con `npx auth secret`
+- [ ] `NEXT_PUBLIC_SITE_URL` con el dominio real (lo usa `event_source_url` de CAPI)
+- [ ] Callbacks OAuth actualizados al dominio de producción
+- [ ] `ADMIN_EMAILS` con tu email o no podrás entrar al dashboard
+- [ ] `META_TEST_EVENT_CODE` **borrada**
 
 ### Cabeceras
 

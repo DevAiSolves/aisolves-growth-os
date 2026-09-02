@@ -29,14 +29,21 @@ optimicen con la señal completa.
 ```bash
 npm install
 cp .env.example .env      # rellena AUTH_SECRET (npx auth secret)
-npm run db:push
-npm run db:seed
+docker compose up -d      # Postgres 16 en :5432
+npm run db:deploy         # aplica las migraciones
+npm run db:seed           # paquetes comerciales
+npm run seed:traffic      # 300 visitantes sintéticos para ver el Traffic Lab
 npm run dev
 ```
 
-Abre <http://localhost:3000>. Funciona con SQLite y cero infraestructura: no
-necesitas base de datos ni credenciales OAuth para ver el sistema de tracking
-funcionando de punta a punta.
+Abre <http://localhost:3000>. No hacen falta credenciales OAuth ni píxeles para
+ver el sistema de tracking funcionando de punta a punta: haz scroll, acepta el
+gate, llega al final y deja tu WhatsApp en el widget.
+
+> **Por qué Postgres y no SQLite.** SQLite no puede respaldar un despliegue
+> serverless: el sistema de ficheros es efímero y de solo lectura, así que toda
+> escritura se perdería o fallaría. `docker compose up -d` deja el entorno local
+> igual de sencillo con un solo comando.
 
 Para probar el pipeline completo: haz scroll → aparece el gate de consentimiento
 → acepta → llega al final → aparece el widget → deja nombre y WhatsApp → recibes
