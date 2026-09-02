@@ -1,0 +1,18 @@
+# El CLI de Vercel NO aplica .gitignore al subir: sin este fichero, `.env` y
+# cualquier nota local acaban dentro del artefacto de despliegue.
+.env
+.env.*
+!.env.example
+DEPLOY-CHECKLIST.md
+*.local
+
+node_modules
+.next
+.git
+.vercel
+
+prisma/*.db
+prisma/*.db-journal
+
+docs
+scripts/seed-traffic.ts
